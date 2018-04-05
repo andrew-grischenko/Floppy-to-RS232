@@ -1,0 +1,690 @@
+;----------------------------------------------------------------------------
+;                       P2 Disk Operating System  V12.1
+;
+; (C) 1995 ESCO electronic division
+;                                                    last revision 10.10.95
+;----------------------------------------------------------------------------
+        ORG     0H
+RESET   DI
+        IM      1
+        JP      BEGIN
+
+        ORG     8H      ; DISK ERROR
+        JP      DSKERR
+
+        ORG     10H     ; LEDS / KEYPAD
+        JP      CONSOL
+
+        ORG     18H
+DISK
+        JP      DISKRD  ; DISK READ
+        ORG     20H
+DISKOFF
+        JP      DISKOF
+
+        ORG     56
+        JP      INT     ; VV51 IN
+
+;--------------------------------------------------------------
+        ORG     40H
+BEGIN   LD      HL,_RAM
+        LD      BC,_RAML
+_MEMCL
+        XOR     A
+        LD      (HL),A
+        INC     HL
+        DEC     BC
+        LD      A,B
+        OR      C
+        JR      NZ,_MEMCL
+
+        LD      SP,_STACK
+        LD      HL,_STACKFAULT
+        PUSH    HL
+
+        CALL    TESTS
+        CALL    INITS
+        IM      1
+        EI
+;
+;-----------------------------------------------------------
+NEWDSK
+        CALL    DSKINF
+MAIN
+        CALL    OPEN
+        CALL    TRANSFER
+        HALT
+        CALL    CLOSE
+END
+;       CALL    WAITRES
+        RST     0
+
+;============================================================
+
+
+
+
+; ---- TRNSFR ----
+TRANSFER
+;       IN      A,(SYS)
+;       AND     KEY_RES
+;       CALL    NZ,RES???
+;       RET     NZ
+
+        CALL    XON?
+        JR      NZ,XON!
+XOFF!
+        CALL    IDLE
+        JR      TRANSFER
+
+XON!
+        XOR     A
+        OUT     (SYS),A
+        LD      HL,MINXON
+        CALL    _SPACE
+        JP      P,TRNS2
+        CALL    FGET
+TRNS2
+        CALL    CONWR
+        RET     C
+        CALL    PUTCOM
+        JR      TRANSFER
+
+;
+; ---- IDLE ----
+IDLE
+        LD      A,0FFH
+        OUT     (SYS),A
+        LD      HL,MINXOF
+        CALL    _SPACE
+        RET     P
+        CALL    FGET
+        RET
+;
+; ---- XON? ----
+XON?
+        LD      A,(XON_NOW)
+        CP      XOFF
+        RET
+
+;       IN      A,(_U_S)
+;       AND     XON_NOW_AP
+;       RET
+;
+; ---- _SPACE ----
+_SPACE
+        PUSH    HL
+        LD      A,(H_T?)
+        OR      A
+        JR      NZ,HEADF
+TAILF
+        LD      HL,(_TAIL)
+        LD      DE,(_HEAD)
+        SCF
+        CCF
+        SBC     HL,DE
+        EX      DE,HL
+        LD      HL,_CNWSZ
+        SCF
+        CCF
+        SBC     HL,DE
+        SCF
+        CCF
+        POP     DE
+        SCF
+        CCF
+        SBC     HL,DE
+        RET
+HEADF
+        LD      HL,(_HEAD)
+        LD      DE,(_TAIL)
+        SCF
+        CCF
+        SBC     HL,DE
+        POP     DE
+        SCF
+        CCF
+        SBC     HL,DE
+        RET
+;
+; ---- FGET ----
+FGET
+        LD      A,(_LST)
+        CP      0FFH                     ;ALL READED
+        RET     Z
+CCN
+        LD      HL,(CURCL)
+        CALL    RD_CLS
+        CALL    DISKRES
+        CALL    CLCNCL
+        LD      HL,(CURCL)
+        LD      DE,0FFFH
+        SCF
+        CCF
+        SBC     HL,DE
+        JR      NZ,NLST
+        LD      A,0FFH
+        LD      (_LST),A
+        LD      HL,(FLLNG)
+        LD      A,3FH
+        AND     H
+        LD      H,A
+        JR      FG523
+
+NLST
+        LD      HL,1024
+FG523
+        PUSH    HL
+        POP     BC
+        LD      HL,_CLBUF
+CON
+        LD      A,(HL)
+        PUSH    HL
+        PUSH    BC
+        CALL    CONWW
+        POP     BC
+        POP     HL
+        INC     HL
+        DEC     BC
+        LD      A,B
+        OR      C
+        JR      NZ,CON
+        RET
+
+;
+; ---- RD_CLS ----
+RD_CLS
+        ADD     HL,HL
+        LD      DE,000AH
+        ADD     HL,DE
+        LD      A,(_SECTORS)
+        LD      C,A
+        CALL    DEVIS
+        INC     C
+        LD      A,C
+        LD      (SECT),A
+
+        LD      C,2
+        CALL    DEVIS
+        LD      A,C
+        LD      (SIDE),A
+
+        LD      A,L
+        LD      (TRACK),A
+
+        LD      A,2
+        LD      (NSECT),A
+        LD      HL,_CLBUF
+        RST     DISK
+        RST     DISKOFF
+        RET
+;
+; ---- CLCNCL
+CLCNCL
+        LD      HL,(CURCL)
+        PUSH    HL
+        PUSH    HL
+        SCF
+        CCF
+        SRL     H
+        RR      L
+        POP     DE
+        ADD     HL,DE
+        LD      DE,_FAT
+        ADD     HL,DE
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)     ; DE - FAT element
+
+        POP     BC
+        BIT     0,C
+        JR      NZ,ODD
+EVEN
+        LD      A,0FH
+        AND     D
+        LD      D,A
+        JR      CLC2
+ODD
+        SRL     D
+        RR      E
+        SRL     D
+        RR      E
+        SRL     D
+        RR      E
+        SRL     D
+        RR      E
+CLC2
+        LD      (CURCL),DE
+        RET
+;
+; ---- CONWW ----
+CONWW
+        LD      HL,(_HEAD)
+        LD      DE,_CONW
+        ADD     HL,DE
+        LD      (HL),A
+        LD      DE,_CNWTOP
+        SCF
+        CCF
+        SBC     HL,DE
+        JR      C,CNWOK
+        LD      HL,0000H
+        XOR     A
+        LD      (H_T?),A
+        JR      CNW2
+CNWOK
+        LD      HL,(_HEAD)
+        INC     HL
+CNW2
+        LD      (_HEAD),HL
+        RET
+;
+; ---- CONWR ----
+CONWR
+        LD      HL,(_TAIL)
+        LD      DE,(_HEAD)
+        SCF
+        CCF
+        SBC     HL,DE
+        JR      NZ,OKR
+        SCF
+        RET
+OKR
+        LD      HL,(_TAIL)
+        LD      DE,_CONW
+        ADD     HL,DE
+        LD      A,(HL)
+        PUSH    AF
+        LD      DE,_CNWTOP
+        SCF
+        CCF
+        SBC     HL,DE
+        JR      C,CNROK
+        LD      HL,0000H
+        LD      A,1
+        LD      (H_T?),A
+        JR      CNR2
+CNROK
+        LD      HL,(_TAIL)
+        INC     HL
+CNR2
+        LD      (_TAIL),HL
+        POP     AF
+        SCF
+        CCF
+        RET
+;
+; ---- DIR ----
+DIR
+        LD      HL,_FAT
+        XOR     A
+        LD      (SIDE),A
+        LD      (TRACK),A
+        LD      A,6
+        LD      (SECT),A
+        LD      A,7
+        LD      (NSECT),A
+        RST     DISK
+
+        LD      IX,_FAT
+        LD      BC,0000H
+M3MOV
+        LD      A,(IX+0)
+        CP      0E5H              ; ERASED
+        JR      Z,NOFILE
+
+        OR      A
+        JR      Z,NOFILE          ; EMPTY ENTRY
+
+        LD      E,(IX+28)
+        LD      D,(IX+29)
+        LD      A,D
+        AND     0FH
+        LD      D,A
+        LD      (FLLNG),DE
+
+        LD      E,(IX+26)
+        LD      D,(IX+27)
+        LD      (CURCL),DE
+        LD      A,1
+        LD      (_LST),A
+
+        LD      A,2
+        LD      (SECT),A
+        LD      A,0
+        LD      (SIDE),A
+        LD      (TRACK),A
+        LD      A,4
+        LD      (NSECT),A
+        LD      HL,_FAT
+        RST     DISK
+        RET
+
+NOFILE
+        LD      BC,32
+        ADD     IX,BC
+        PUSH    IX
+        POP     HL
+        LD      BC,3584
+        SCF
+        CCF
+        SBC     HL,BC
+        RET     Z
+        JP      M3MOV
+;
+; ---- GETMEDIA ----
+GETMEDIA
+        LD      A,9
+        LD      (_SECTORS),A
+        LD      A,80
+        LD      (_TRACKS),A
+        RET
+;
+; ---- OPEN ----
+OPEN
+        RET
+;
+; ---- CLOSE ----
+CLOSE
+        RET
+;
+; ---- DSKINF ----
+DSKINF
+        CALL    GETMEDIA
+        CALL    DIR
+        RET
+
+;
+; ---- _STACKFAULT -----
+_STACKFAULT
+        LD      A,0FFH
+        OUT     (SYS),A
+        HALT
+;
+; ---- TESTS ----
+TESTS
+        RET
+;
+; ---- INITS ----
+INITS
+        LD      A,1
+        LD      (XON_NOW),A
+        LD      HL,0000
+        LD      (_HEAD),HL
+        LD      (_TAIL),HL
+        LD      A,1
+        LD      (H_T?),A
+        LD      A,XON
+        LD      (XON_NOW),A
+
+        CALL    DISKRES
+        CALL    SETPORT
+        RET
+;
+; ---- DISKRES ----
+DISKRES
+        LD      A,0AAH
+        OUT     (WG_CTR),A
+        CALL    WAIT
+        LD      A,0AEH
+        LD      (DISK_SET),A
+        OUT     (WG_CTR),A
+        CALL    WAIT
+        CALL    BUSY
+        CALL    DISKOF
+        RET
+;
+; ---- DISKRD ----
+DISKRD
+        CALL    DISKON
+        LD      A,(NSECT)
+        LD      C,A
+        LD      B,0
+DDR2
+        PUSH    BC
+        LD      A,(SIDE)
+        OR      A
+        JR      Z,SD0
+SD1
+        LD      A,(DISK_SET)
+        RES     1,A
+        LD      (DISK_SET),A
+        OUT     (WG_CTR),A
+        JR      DRCONT
+SD0
+        LD      A,(DISK_SET)
+        SET     1,A
+        LD      (DISK_SET),A
+        OUT     (WG_CTR),A
+DRCONT
+        LD      A,(TRACK)
+        OUT     (WG_DT),A
+        LD      A,1FH
+        OUT     (WG_COM),A
+        CALL    WAIT
+        CALL    BUSY
+
+        LD      A,(SECT)
+        OUT     (WG_SC),A
+        LD      A,(TRACK)
+        OUT     (WG_DT),A
+        LD      A,80H
+        OUT     (WG_COM),A
+        CALL    WAIT
+        CALL    RED
+
+        IN      A,(WG_STATE)
+        BIT     4,A
+        JP      NZ,DSKERR
+        BIT     3,A
+        JP      NZ,DSKERR
+
+        LD      A,(_SECTORS)
+        LD      B,A
+        LD      A,(SECT)
+        INC     A
+        INC     B
+        LD      (SECT),A
+        CP      B
+        JR      NZ,R2
+        LD      A,1
+        LD      (SECT),A
+        LD      A,(SIDE)
+        OR      A
+        JR      NZ,SID1
+SID0
+        INC     A
+        LD      (SIDE),A
+        JR      R2
+SID1
+        XOR     A
+        LD      (SIDE),A
+        LD      A,(_TRACKS)
+        LD      B,A
+        LD      A,(TRACK)
+        INC     A
+        LD      (TRACK),A
+        CP      B
+        JR      Z,DSKERR
+R2
+        POP     BC
+        DEC     BC
+        LD      A,B
+        OR      C
+        JP      NZ,DDR2
+        RET
+;
+; ---- BUSY ----
+BUSY    IN      A,(WG_STATE)
+        OUT     (SYS),A
+        BIT     0,A
+        JR      NZ,BUSY
+        BIT     4,A
+        JP      NZ,DSKERR
+        BIT     3,A
+        JP      NZ,DSKERR
+        RET
+;
+; ---- RED ----
+RED
+        LD      C,WG_DT
+REDI
+        IN      A,(WG_CTR)
+        AND     0C0H
+        JR      Z,REDI
+        RET     M
+        INI
+        JR      REDI
+;
+; ---- WAIT ----
+WAIT    LD      C,0FFH
+W1      DEC     C
+        DJNZ    W1
+        RET
+;
+; ---- CONSOL ----
+CONSOL
+        RET
+;
+; ---- DSKERR ----
+DSKERR
+        CALL    WAIT
+        LD      A,55H
+        OUT     (SYS),A
+        CALL    WAIT
+        LD      A,0AAH
+        OUT     (SYS),A
+        JR      DSKERR
+;
+; ---- RES??? ----
+RES???
+        RET
+;
+; ---- DEVIS ----
+DEVIS
+        LD      DE,0
+        LD      B,0
+CONTD
+        SCF
+        CCF
+        PUSH    HL
+        SBC     HL,BC
+        JP      C,DONE
+        INC     DE
+        POP     AF
+        JR      CONTD
+DONE
+        EX      DE,HL
+        POP     BC
+        RET
+;
+; ---- STOP ----
+STOP
+        LD      A,0FFH
+        OUT     (SYS),A
+        HALT
+
+
+; ---- DISKOF ----
+DISKOF
+        LD      A,(DISK_SET)
+        SET     4,A
+        LD      (DISK_SET),A
+        OUT     (WG_CTR),A
+        RET
+
+; ---- DISKON ----
+DISKON
+        LD      A,(DISK_SET)
+        RES     4,A
+        LD      (DISK_SET),A
+        OUT     (WG_CTR),A
+        RET
+;
+; ---- SETPORT ----
+SETPORT
+        LD      A,7BH
+        OUT     (V51_CTR),A
+        LD      A,40H
+        OUT     (V51_CTR),A
+        LD      A,4BH
+        OUT     (V51_CTR),A
+        LD      A,35H
+        OUT     (V51_CTR),A
+        IN      A,(V51_DAT)
+        RET
+;
+; ---- PUTCOM ----
+PUTCOM
+        OUT     (V51_DAT),A
+        CALL    WAIT
+        RET
+;
+; ---- INT ----
+INT
+        PUSH    AF
+        IN      A,(V51_DAT)
+        CP      XOFF
+        JR      Z,XNXF
+        CP      XON
+        JR      Z,XNXF
+        POP     AF
+        EI
+        RETI
+XNXF
+        LD      (XON_NOW),A
+        POP     AF
+        EI
+        RETI
+
+;
+; ---- VARIABLES --------
+_ROM            EQU     0000H
+_RAM            EQU     2000H
+_RAML           EQU     1BFFH
+_FAT            EQU     2400H
+_BUFFER         EQU     2C00H
+_CLBUF          EQU     2800H
+_CONW           EQU     3000H
+_CNWSZ          EQU     2F40H
+_CNWTOP         EQU     3F40H
+_STACK          EQU     3FFEH
+MINXON          EQU     00FFH
+MINXOF          EQU     0900H
+XON             EQU     17
+XOFF            EQU     19
+WG_COM          EQU     04H
+WG_TR           EQU     05H
+WG_SC           EQU     06H
+WG_STATE        EQU     04H
+WG_DT           EQU     07H
+WG_CTR          EQU     0CH
+SYS             EQU     0
+KEY_RES         EQU     01H
+V51_DAT         EQU     08H
+V51_CTR         EQU     09H
+V51_TXE         EQU     02H
+_U_S            EQU     20H
+XON_NOW_AP      EQU     10H
+
+
+
+                ORG     _RAM
+DISK_SET        DEFM    1
+SIDE            DEFM    1
+TRACK           DEFM    1
+SECT            DEFM    1
+NSECT           DEFM    1
+XON_NOW         DEFM    1
+FLLNG           DEFM    4
+_FP             DEFM    2
+CURCL           DEFM    2
+_LST            DEFM    1
+_HEAD           DEFM    2
+_TAIL           DEFM    2
+H_T?            DEFM    1
+_SECTORS        DEFM    1
+_TRACKS         DEFM    1
+;////////////////////////////////////////
+
+
